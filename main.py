@@ -91,20 +91,30 @@ async def on_ready():
     
     # スラッシュコマンドを同期
     try:
-        # グローバル同期（時間がかかる）
+        # グローバル同期（時間がかかるがレートリミットを避ける）
+        print('🔄 グローバルコマンドを同期中...')
         synced = await bot.tree.sync()
-        print(f'🔄 グローバルコマンドを同期しました: {len(synced)}個')
+        print(f'✅ グローバルコマンドを同期しました: {len(synced)}個')
         
-        # 各サーバーでも同期（即時反映）
-        for guild in bot.guilds:
+        # 最初のサーバーのみ同期（即時反映）
+        if bot.guilds:
+            first_guild = bot.guilds[0]
             try:
-                guild_synced = await bot.tree.sync(guild=guild)
-                print(f'🔄 {guild.name} でコマンドを同期しました: {len(guild_synced)}個')
+                guild_synced = await bot.tree.sync(guild=first_guild)
+                print(f'✅ {first_guild.name} でコマンドを同期しました: {len(guild_synced)}個')
             except Exception as guild_error:
-                print(f'❌ {guild.name} での同期エラー: {guild_error}')
+                print(f'❌ {first_guild.name} での同期エラー: {guild_error}')
                 
     except Exception as e:
         print(f'❌ コマンド同期エラー: {e}')
+        print('⏳ 1分待機して再試行します...')
+        import asyncio
+        await asyncio.sleep(60)
+        try:
+            synced = await bot.tree.sync()
+            print(f'✅ 再同期成功: {len(synced)}個')
+        except Exception as retry_error:
+            print(f'❌ 再同期も失敗: {retry_error}')
     print('------')
 
 @bot.event
@@ -134,7 +144,7 @@ async def send_help(interaction: discord.Interaction):
         description="新しいボットのメニューです。",
         color=0x2b2d31
     )
-    embed.add_field(name="🛠️ Utility", value="`/help`, `/web_auth` ", inline=False)
+    embed.add_field(name="🛠️ Utility", value="`/help`, `/web_auth`, `/sync` ", inline=False)
     embed.set_footer(text="すべてのコマンドはスラッシュコマンド '/' で利用可能です。")
     
     if isinstance(interaction, discord.Interaction):
@@ -164,6 +174,29 @@ async def userinfo_slash(interaction: discord.Interaction, user: discord.User = 
     embed.add_field(name="アカウント作成日", value=target_user.created_at.strftime('%Y年%m月%d日'), inline=True)
     embed.set_thumbnail(url=target_user.display_avatar.url)
     await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name='sync', description='コマンドを手動で同期します（管理者のみ）')
+async def sync_slash(interaction: discord.Interaction):
+    """コマンドを手動で同期"""
+    # 管理者チェック
+    if interaction.user.id != 1488225308804120759:
+        await interaction.response.send_message("このコマンドは管理者のみ使用できます。", ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        # グローバル同期
+        synced = await bot.tree.sync()
+        await interaction.followup.send(f"✅ グローバルコマンドを同期しました: {len(synced)}個", ephemeral=True)
+        
+        # サーバー同期
+        if interaction.guild:
+            guild_synced = await bot.tree.sync(guild=interaction.guild)
+            await interaction.followup.send(f"✅ {interaction.guild.name} でコマンドを同期しました: {len(guild_synced)}個", ephemeral=True)
+            
+    except Exception as e:
+        await interaction.followup.send(f"❌ 同期エラー: {e}", ephemeral=True)
 
 @bot.tree.command(name='web_auth', description='Webサイト用の認証トークンを取得します')
 async def web_auth_slash(interaction: discord.Interaction):
