@@ -20,6 +20,15 @@ intents.members = True
 # プレフィックスコマンドとスラッシュコマンドの両方を使用
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
+@bot.event
+async def on_guild_join(guild):
+    """サーバーに参加したときにコマンドを同期"""
+    try:
+        await bot.tree.sync(guild=guild)
+        print(f'🔄 {guild.name} でコマンドを同期しました')
+    except Exception as e:
+        print(f'❌ {guild.name} での同期エラー: {e}')
+
 # ===== Web認証用関数 =====
 
 def load_web_auth_tokens() -> dict:
@@ -82,8 +91,18 @@ async def on_ready():
     
     # スラッシュコマンドを同期
     try:
-        await bot.tree.sync()
-        print(f'🔄 コマンドを同期しました。')
+        # グローバル同期（時間がかかる）
+        synced = await bot.tree.sync()
+        print(f'🔄 グローバルコマンドを同期しました: {len(synced)}個')
+        
+        # 各サーバーでも同期（即時反映）
+        for guild in bot.guilds:
+            try:
+                guild_synced = await bot.tree.sync(guild=guild)
+                print(f'🔄 {guild.name} でコマンドを同期しました: {len(guild_synced)}個')
+            except Exception as guild_error:
+                print(f'❌ {guild.name} での同期エラー: {guild_error}')
+                
     except Exception as e:
         print(f'❌ コマンド同期エラー: {e}')
     print('------')
@@ -156,7 +175,7 @@ async def web_auth_slash(interaction: discord.Interaction):
         token = generate_web_auth_token(interaction.user.id, str(interaction.user))
         
         # WebサイトのURLを構築
-        web_url = "http://localhost:8000"  # 実際のWebサイトURLに変更
+        web_url = "https://prim.gg"  # Cloudflare Pages用URL
         
         # DMでトークンを送信
         embed = discord.Embed(
