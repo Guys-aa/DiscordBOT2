@@ -7,5 +7,5 @@ services:
     startCommand: python bot2.py
     envVars:
       - key: DISCORD_TOKEN2
-        value: MTQ4ODIyNTMwODgwNDEyMDc1OQ.Gz_AVE.pwE3mgrsNOPhYqGR9C_L0ShDoLgLrlX5J3yUpA
+        sync: false
     healthCheckPath: /health
