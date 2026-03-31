@@ -1,0 +1,17 @@
+# fly.toml app configuration file generated for DiscordBot
+
+app = "discord-bot-prim" # Change this as needed
+primary_region = "nrt" # Adjust to your desired region (e.g. nrt for Tokyo)
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
