@@ -335,7 +335,7 @@ async def web_auth_slash(interaction: discord.Interaction):
         token = generate_web_auth_token(interaction.user.id, str(interaction.user))
         
         # WebサイトのURLを構築
-        web_url = "https://prim.gg"  # Cloudflare Pages用URL
+        web_url = "https://infinity-store.pages.dev"  # Cloudflare Pages用URL
         
         # DMでトークンを送信
         embed = discord.Embed(
