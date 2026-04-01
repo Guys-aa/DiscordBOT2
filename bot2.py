@@ -5,6 +5,8 @@ import os
 import json
 import datetime
 import secrets
+import asyncio
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,6 +15,11 @@ load_dotenv()
 WEB_AUTH_FILE = "web_auth_tokens.json"  # Web認証トークン管理
 PENDING_ORDERS_FILE = "pending_orders.json"  # 購入申請の状態
 PAYPAY_CHANNEL_FILE = "paypay_notify_channel.json"  # PayPay通知チャンネル設定
+AUTO_SYNC_ON_READY = os.getenv("AUTO_SYNC_ON_READY", "true").lower() in {"1", "true", "yes", "on"}
+SYNC_COOLDOWN_SECONDS = int(os.getenv("SYNC_COOLDOWN_SECONDS", "1800"))  # 30分
+STARTUP_RETRY_BASE_SECONDS = int(os.getenv("STARTUP_RETRY_BASE_SECONDS", "30"))
+STARTUP_RETRY_MAX_SECONDS = int(os.getenv("STARTUP_RETRY_MAX_SECONDS", "900"))  # 15分
+STARTUP_RETRY_LIMIT = int(os.getenv("STARTUP_RETRY_LIMIT", "0"))  # 0: 無制限
 
 # Botの設定
 intents = discord.Intents.default()
@@ -21,13 +28,45 @@ intents.members = True
 
 # プレフィックスコマンドとスラッシュコマンドの両方を使用
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+last_global_sync_at: datetime.datetime | None = None
+persistent_views_registered = False
+
+
+def _utc_now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _is_rate_limit_error(error: Exception) -> bool:
+    text = str(error).lower()
+    if isinstance(error, discord.HTTPException) and error.status == 429:
+        return True
+    return "rate limited" in text or "error 1015" in text or "cloudflare" in text
+
+
+async def safe_sync_commands(guild: discord.Guild | None = None) -> list[app_commands.AppCommand]:
+    delays = [5, 15, 45, 90]
+    target = f"{guild.name} ({guild.id})" if guild else "グローバル"
+
+    for attempt, delay in enumerate(delays, start=1):
+        try:
+            return await bot.tree.sync(guild=guild)
+        except Exception as e:
+            is_last = attempt == len(delays)
+            if is_last or not _is_rate_limit_error(e):
+                raise
+            print(f"⚠️ {target}同期でレート制限を検出: {e}")
+            print(f"⏳ {delay}秒待機して再試行します ({attempt}/{len(delays)})")
+            await asyncio.sleep(delay)
+
+    # 到達しないが型のために返す
+    return []
 
 @bot.event
 async def on_guild_join(guild):
     """サーバーに参加したときにコマンドを同期"""
     try:
-        await bot.tree.sync(guild=guild)
-        print(f'🔄 {guild.name} でコマンドを同期しました')
+        synced = await safe_sync_commands(guild=guild)
+        print(f'🔄 {guild.name} でコマンドを同期しました ({len(synced)}個)')
     except Exception as e:
         print(f'❌ {guild.name} での同期エラー: {e}')
 
@@ -210,20 +249,36 @@ class AdminOrderView(discord.ui.View):
 @bot.event
 async def on_ready():
     """Botが起動したときに呼ばれるイベント"""
+    global last_global_sync_at, persistent_views_registered
+
     print(f'✅ ログイン: {bot.user.name}')
     print(f'🆔 Bot ID: {bot.user.id}')
     print(f'📡 接続サーバー数: {len(bot.guilds)}')
     
     # 永続ビューの再登録
-    for oid, odata in load_pending_orders().items():
-        if odata.get("status") == "pending":
-            bot.add_view(AdminOrderView(oid))
+    if not persistent_views_registered:
+        for oid, odata in load_pending_orders().items():
+            if odata.get("status") == "pending":
+                bot.add_view(AdminOrderView(oid))
+        persistent_views_registered = True
 
-    # スラッシュコマンドを同期
+    if not AUTO_SYNC_ON_READY:
+        print("⏭️ AUTO_SYNC_ON_READY=false のため起動時同期をスキップしました")
+        print('------')
+        return
+
+    now = _utc_now()
+    if last_global_sync_at and (now - last_global_sync_at).total_seconds() < SYNC_COOLDOWN_SECONDS:
+        remaining = int(SYNC_COOLDOWN_SECONDS - (now - last_global_sync_at).total_seconds())
+        print(f"⏭️ 起動時同期をスキップしました (クールダウン残り: {remaining}秒)")
+        print('------')
+        return
+
+    # スラッシュコマンドを同期（短時間連打を避ける）
     try:
-        await bot.tree.sync()
-        print('🔄 コマンドを同期しました')
-        
+        synced = await safe_sync_commands()
+        last_global_sync_at = _utc_now()
+        print(f'🔄 コマンドを同期しました ({len(synced)}個)')
     except Exception as e:
         print(f'❌ 初期化エラー: {e}')
     print('------')
@@ -289,6 +344,8 @@ async def userinfo_slash(interaction: discord.Interaction, user: discord.User = 
 @bot.tree.command(name='sync', description='コマンドを手動で同期します（管理者のみ）')
 async def sync_slash(interaction: discord.Interaction):
     """コマンドを手動で同期"""
+    global last_global_sync_at
+
     # 管理者チェック
     if interaction.user.id != 1488225308804120759:
         await interaction.response.send_message("このコマンドは管理者のみ使用できます。", ephemeral=True)
@@ -298,12 +355,13 @@ async def sync_slash(interaction: discord.Interaction):
     
     try:
         # グローバル同期
-        synced = await bot.tree.sync()
+        synced = await safe_sync_commands()
+        last_global_sync_at = _utc_now()
         await interaction.followup.send(f"✅ グローバルコマンドを同期しました: {len(synced)}個", ephemeral=True)
         
         # サーバー同期
         if interaction.guild:
-            guild_synced = await bot.tree.sync(guild=interaction.guild)
+            guild_synced = await safe_sync_commands(guild=interaction.guild)
             await interaction.followup.send(f"✅ {interaction.guild.name} でコマンドを同期しました: {len(guild_synced)}個", ephemeral=True)
             
     except Exception as e:
@@ -428,9 +486,30 @@ threading.Thread(target=start_server, daemon=True).start()
 
 # ===== Botの起動 =====
 
+def run_bot_with_retry(token: str):
+    attempt = 0
+    while True:
+        try:
+            bot.run(token)
+            return
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            attempt += 1
+
+            if STARTUP_RETRY_LIMIT > 0 and attempt >= STARTUP_RETRY_LIMIT:
+                print(f"❌ 起動再試行の上限 ({STARTUP_RETRY_LIMIT}) に達しました: {e}")
+                raise
+
+            wait_seconds = min(STARTUP_RETRY_BASE_SECONDS * (2 ** (attempt - 1)), STARTUP_RETRY_MAX_SECONDS)
+            print(f"⚠️ Bot起動エラー: {e}")
+            print(f"⏳ {wait_seconds}秒待って再試行します ({attempt}回目)")
+            time.sleep(wait_seconds)
+
+
 if __name__ == '__main__':
     token = os.getenv('DISCORD_TOKEN2')
     if not token:
         print("❌ DISCORD_TOKEN2 が設定されていません。")
     else:
-        bot.run(token)
+        run_bot_with_retry(token)
