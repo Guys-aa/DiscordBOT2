@@ -418,9 +418,11 @@ async def web_auth_slash(interaction: discord.Interaction):
 # ===== Webストア連携 API (Flask) =====
 
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import threading
 
 app = Flask(__name__)
+CORS(app)
 
 @app.route('/')
 def health_check():
