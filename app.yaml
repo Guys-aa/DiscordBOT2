@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: infinity-store-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot2.py
+    envVars:
+      - key: DISCORD_TOKEN2
+        sync: false
+      - key: PORT
+        value: 8000
