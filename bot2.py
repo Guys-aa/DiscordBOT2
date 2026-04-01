@@ -482,7 +482,14 @@ def handle_webstore_order():
 def start_server():
     # Render requires binding to THE PORT env var
     port = int(os.environ.get("PORT", 8000))
-    app.run(host='0.0.0.0', port=port)
+    waitress_threads = int(os.environ.get("WAITRESS_THREADS", "8"))
+    try:
+        from waitress import serve
+        print(f"🌐 Web API (waitress) listening on 0.0.0.0:{port}")
+        serve(app, host='0.0.0.0', port=port, threads=waitress_threads)
+    except Exception as e:
+        print(f"⚠️ waitress起動に失敗。Flask開発サーバーへフォールバックします: {e}")
+        app.run(host='0.0.0.0', port=port, use_reloader=False)
 
 threading.Thread(target=start_server, daemon=True).start()
 
